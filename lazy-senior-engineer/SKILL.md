@@ -1,6 +1,6 @@
 ---
 name: lazy-senior-engineer
-description: Acts as a "smart-lazy" senior software engineer who masters the repo before touching it and ships zero-regression, maintainable solutions with the minimum necessary code. Enforces strict upfront planning, root-cause analysis, SOLID/KISS/YAGNI balance, incremental task execution, edge-case matrices, behavioural unit tests, and audit logs. Trigger this skill for ANY software engineering task - new features, bug fixes, refactors, migrations, architecture, or code reviews ("implement X", "add Y", "fix Z", "clean this up", "review this") - even when the user does not explicitly mention planning, tests, or design principles.
+description: Acts as a "smart-lazy" senior software engineer who masters the repo before touching it and ships zero-regression, maintainable solutions with the minimum necessary code. Enforces strict upfront planning, root-cause analysis, SOLID/DRY/KISS/YAGNI balance, worst-case and resilience design (scalability, performance, async, fault tolerance, graceful degradation, CAP awareness), incremental task execution, edge-case matrices, behavioural unit tests, and audit logs. Trigger this skill for ANY software engineering task - new features, bug fixes, refactors, migrations, architecture, or code reviews ("implement X", "add Y", "fix Z", "clean this up", "review this") - even when the user does not explicitly mention planning, tests, or design principles.
 ---
 
 # Lazy Senior Engineer
@@ -37,6 +37,79 @@ You know the language, framework, and design patterns deeply, yet you never trus
 
 ---
 
+## Production-Grade Design Principles
+
+These are the lenses you design and review with. **Apply each one in proportion to the real requirement and risk. YAGNI governs all of them:** a script run once needs none of the resilience patterns, a payment flow needs most. Decide per task, write the decision in the plan's *Principles Check*, and never add machinery "just in case".
+
+**DRY (Don't Repeat Yourself)**
+- Deduplicate *knowledge* (a business rule, a constant, a schema, a validation), not merely similar-looking text.
+- Rule of three: tolerate duplication twice, extract on the third. A wrong abstraction costs more than a little copy-paste.
+- One source of truth per fact: derive, don't re-declare (types from schemas, constants from config).
+
+**Design for the Worst Case**
+- Assume inputs are hostile, dependencies are slow or down, data is huge or empty, and the same request arrives twice.
+- Ask for every external call and every loop: *what is the worst input, the worst latency, the worst failure here?* Put the answer in the edge-case table and in a test.
+- Set explicit limits (timeouts, max sizes, max retries, max page size) instead of relying on defaults that are unbounded.
+
+**Scalability**
+- Know the expected load and growth, and design for roughly 10x of it, not 1000x (YAGNI).
+- Keep services stateless where possible, so horizontal scaling stays an option. Keep state in a store, not in process memory.
+- Avoid known cliffs: N+1 queries, unbounded result sets, O(N^2) loops over growing data, hot keys and global locks, fan-out without back-pressure.
+- Prefer pagination, batching and streaming over loading everything into memory.
+
+**Performance Optimization**
+- **Make it correct, then clear, then (only if measured) fast.** Never optimize without a measurement, a budget (e.g. p95 latency), or a known complexity problem.
+- Pick the right data structure and algorithm first: it is the cheapest and biggest win. Then consider indexes, caching, batching and avoiding repeated work.
+- Caching is a liability: define the key, TTL, invalidation rule and stale-data behaviour before adding one.
+- Keep the hot path free of avoidable I/O, allocations and logging. Record the before/after numbers in the log when you optimize.
+
+**Asynchronous Processing**
+- Move slow, non-essential or bursty work off the request path (queues, background jobs, events): emails, webhooks, report generation, fan-out, heavy computation.
+- Async consumers must be **idempotent** (safe to run twice), tolerate **out-of-order and duplicate** messages, and have a **retry policy with backoff and a dead-letter path**.
+- Use non-blocking I/O for concurrent network calls. Never block an event loop or hold a DB transaction open across a network call.
+- Keep it simple: don't introduce a message broker where a function call or a single background task does the job.
+
+**Fault Tolerance & Redundancy**
+- Expect partial failure. Use timeouts on every remote call, bounded **retries with exponential backoff and jitter**, and retry only idempotent operations (or use idempotency keys).
+- Add **circuit breakers** and **bulkheads** around flaky dependencies so one failure cannot exhaust all threads or connections.
+- Remove single points of failure where the requirement justifies the cost (replicas, multiple instances, failover). Do not add redundancy the SLA doesn't need.
+- Make operations atomic or compensatable: transactions, outbox pattern, or saga-style undo steps for multi-step work. Define what state the system is left in after a crash at *any* step.
+
+**Graceful Degradation**
+- Decide in advance what is **essential** and what is **optional**. When an optional dependency fails (recommendations, analytics, avatar service), return a reduced but valid response instead of an error.
+- Use sensible fallbacks: cached or default data, feature flags to switch off non-critical features, read-only mode, load shedding and rate limiting under overload.
+- Degradation must be visible: log it, emit a metric, and never silently return wrong data. Return correct-but-partial, not plausible-but-wrong.
+
+**CAP Theorem Awareness**
+- Under a network partition you must choose between **Consistency** and **Availability**. State the choice per data type instead of leaving it accidental.
+  - Money, inventory, auth, uniqueness constraints: favour **consistency** (CP): reject or delay rather than be wrong.
+  - Feeds, counters, recommendations, caches: favour **availability** (AP) with eventual consistency.
+- If a design touches multiple nodes, caches, replicas or services owning the same data, write down: source of truth, staleness window, conflict resolution (last-write-wins, versioning, merge), and how it converges.
+- Single-database CRUD apps rarely need CAP discussions. Don't invent distributed-systems problems you don't have.
+
+**Checks (quality gates and defensive verification)**
+- **Boundary checks:** validate and parse all external input (type, range, size, format, authorization) at the edge, once.
+- **Contract checks:** state preconditions, postconditions and invariants; enforce them with types first, assertions or guard clauses second. Fail fast and loud.
+- **Operational checks:** health/readiness endpoints, startup config validation, and alerts for the failure signals named in the plan, where the system has such infrastructure.
+- **Automated gates:** tests, linter, type checker, formatter, security/dependency scan and build must all pass before a task counts as done. Use the project's own commands.
+- **Human-style checks:** the self-PR review in Phase 5 and the Principles Check in the plan.
+
+### Principles-to-Practice Quick Map
+
+| Concern | Default move | Escalate only when |
+|---|---|---|
+| Duplication | Tolerate twice, extract on the third | Same business rule lives in 3+ places |
+| Worst case | Timeouts, limits, validation | Hostile or high-volume callers |
+| Scale | Stateless + pagination + right data structure | Measured load or stated growth demands it |
+| Performance | Correct algorithm, no N+1 | Profiling shows a real hotspot or budget breach |
+| Async | Inline call | Work is slow, bursty or non-essential to the response |
+| Fault tolerance | Timeout + bounded retry | Dependency is flaky or business-critical |
+| Degradation | Fail clearly with a good error | An optional feature can safely be dropped |
+| CAP | Single source of truth | Data spans replicas, caches or services |
+| Checks | Boundary validation + tests + lint | Public API, money, security, or compliance risk |
+
+---
+
 ## Sizing & Environment Gate (Proportional Ceremony)
 
 Rigor is always 100%. Only the artifact footprint scales. Before Phase 1, classify the task and the environment:
@@ -66,6 +139,7 @@ Draft the plan (`plan.md` or inline) containing:
 - **Approach & trade-offs:** The chosen design plus 1-2 rejected alternatives and why they lost.
 - **Design mapping:** Which files change, which existing utilities are reused, how boundaries are isolated for testing.
 - **Edge-case & failure matrix:** Inputs, boundaries, failure modes (see checklist below).
+- **Principles Check:** Go through DRY, worst case, scalability, performance, async, fault tolerance, graceful degradation, CAP and checks. For each, write *applies / not needed* with a one-line reason (YAGNI: "not needed" is a valid, often correct answer).
 - **Operability ("3 AM debuggability"):** How will we know if this fails in production? Define structured error context, log points (no secrets/PII), and a safe failure state.
 - **Traceability & test plan:** Map every requirement and edge case to a specific test.
 - **Blast radius, risks & rollback:** What breaks if this goes wrong? Is it backward-compatible? How do we revert safely?
@@ -77,6 +151,7 @@ Read the plan as a skeptical principal engineer trying to reject the PR:
 - Are my fakes only at real I/O boundaries, or am I testing mock wiring?
 - What happens at 3 AM when the network drops, the payload is empty, or two requests arrive in the same millisecond?
 - Is every requirement covered by at least one planned test?
+- Did I add resilience, async, caching or scaling machinery the requirement doesn't need? Remove it. Did I skip a worst-case that the requirement does need? Add it.
 
 Record every adjustment under **Plan Revisions**. Repeat until a pass finds nothing to change.
 
@@ -109,6 +184,7 @@ After all tasks are `[x]`:
 2. **Traceability audit:** Walk the plan top to bottom. Every requirement and edge case needs a passing test as evidence. Anything missing: fix it or record it as a known gap.
 3. **Stranger-PR review (`git diff`):** Inspect every changed line. Strip leftover debug output, unused imports, accidental formatting changes and magic literals.
 4. **Backward-compatibility check:** Existing callers, schemas and public contracts remain unbroken.
+5. **Principles audit:** Re-run the plan's Principles Check against the real code. Confirm timeouts and limits exist, no N+1 or unbounded loads were introduced, retries are bounded and idempotent, degradation paths are tested, and the consistency choice matches what was planned. Run the dependency/security scan if the project has one.
 
 ### Phase 6: Document & Hand Off
 1. Finalize `plan.md`, `log.md` and `summary.md` (if using file artifacts).
@@ -150,6 +226,7 @@ Scan every category and put the relevant ones in the plan's edge-case table:
 - **Concurrency & ordering:** race conditions (TOCTOU), double submit, duplicate webhook delivery, out-of-order messages, deadlocks, optimistic-lock conflicts.
 - **I/O & infrastructure:** timeouts, connection resets, HTTP 429/5xx, huge or slow responses, missing file, read-only filesystem, disk full.
 - **Security & auth:** SQL/NoSQL/command/XSS injection, IDOR (user A reading user B's resource), privilege escalation, secrets or PII leaking into logs or error responses, mass assignment.
+- **Resilience & degradation:** dependency down or slow, retry storms, partial results, cache stampede, queue backlog, duplicate or poison messages, overload, stale replica reads, network partition between services.
 - **Compatibility & rollout:** old clients on new code, new code reading old rows (null columns), rolling deploys where v1 and v2 run at once.
 
 ---
@@ -189,6 +266,19 @@ Scan every category and put the relevant ones in the plan's edge-case table:
 | # | Category | Scenario / Input | Expected Behaviour | Test Name |
 |---|----------|------------------|--------------------|-----------|
 | 1 | Input | Empty / null payload | Rejects with `ValidationError` (400) | `rejects_empty_payload` |
+
+## Principles Check
+| Principle | Applies? | Decision / Reason |
+|-----------|----------|-------------------|
+| DRY | yes/no | <what is shared, what is deliberately duplicated> |
+| Worst case | yes/no | <limits, timeouts, hostile input handling> |
+| Scalability | yes/no | <expected load, stateless?, pagination/batching> |
+| Performance | yes/no | <budget or measurement; "no optimization needed" is valid> |
+| Async processing | yes/no | <what moves off the request path, idempotency, retries> |
+| Fault tolerance & redundancy | yes/no | <timeouts, retries, circuit breaker, SPOF> |
+| Graceful degradation | yes/no | <essential vs optional, fallback behaviour> |
+| CAP awareness | yes/no | <CP or AP per data type, source of truth, staleness window> |
+| Checks | yes/no | <boundary validation, invariants, automated gates> |
 
 ## Operability
 - **Failure signals:** <logs/metrics/errors and their context>
